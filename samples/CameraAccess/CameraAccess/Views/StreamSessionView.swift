@@ -12,12 +12,14 @@
 //
 
 import MWDATCore
+import SwiftData
 import SwiftUI
 
 struct StreamSessionView: View {
   let wearables: WearablesInterface
   var wearablesViewModel: WearablesViewModel
   @State private var viewModel: StreamSessionViewModel
+  @Environment(\.modelContext) private var modelContext
 
   init(wearables: WearablesInterface, wearablesVM: WearablesViewModel) {
     self.wearables = wearables
@@ -48,6 +50,10 @@ struct StreamSessionView: View {
       }
     } message: {
       Text("Unable to capture photo. This may be due to low storage on device or another capture already in progress. Please try again in a few moments.")
+    }
+    .task {
+      viewModel.configureRecognitionStore(modelContext)
+      viewModel.configureProductResolver(modelContext)
     }
   }
 }

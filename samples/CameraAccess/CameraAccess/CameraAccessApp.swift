@@ -15,6 +15,7 @@
 // of DAT SDK integration including device registration, permissions, and media streaming.
 //
 
+import FirebaseCore
 import Foundation
 import MWDATCore
 import SwiftUI
@@ -33,6 +34,8 @@ struct CameraAccessApp: App {
   @State private var wearablesViewModel: WearablesViewModel
 
   init() {
+    FirebaseApp.configure()
+
     do {
       try Wearables.configure()
     } catch {
@@ -74,7 +77,17 @@ struct CameraAccessApp: App {
         }
         #if DEBUG
       .sheet(isPresented: $debugMenuViewModel.showDebugMenu) {
-        MockDeviceKitView(viewModel: debugMenuViewModel.mockDeviceKitViewModel)
+        TabView {
+          MockDeviceKitView(viewModel: debugMenuViewModel.mockDeviceKitViewModel)
+            .tabItem {
+              Label("Mock Devices", systemImage: "antenna.radiowaves.left.and.right")
+            }
+
+          RecognizedTextLogView()
+            .tabItem {
+              Label("Recognized Text", systemImage: "text.viewfinder")
+            }
+        }
       }
       .overlay {
         DebugMenuView(debugMenuViewModel: debugMenuViewModel)
@@ -84,5 +97,6 @@ struct CameraAccessApp: App {
       // Registration view handles the flow for connecting to the glasses via Meta AI
       RegistrationView(viewModel: wearablesViewModel)
     }
+    .modelContainer(for: [RecognizedTextEntry.self, CachedProduct.self])
   }
 }
