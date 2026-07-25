@@ -305,6 +305,7 @@
 			buildPhases = (
 				AAAAAAAAAAAAAAAAAAAAAA /* Sources */,
 				4A4A4A4A4A4A4A4A4A4A4A4A /* Frameworks */,
+				567C7AF38F2146BD89375C25 /* Download DepthPro Model Weights */,
 				BBBBBBBBBBBBBBBBBBBBBB /* Resources */,
 				8FD96B932E6F0C6E00F56AB1 /* Embed Frameworks */,
 			);
@@ -441,6 +442,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		567C7AF38F2146BD89375C25 /* Download DepthPro Model Weights */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Download DepthPro Model Weights";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/CameraAccess/MLModels/DepthProPruned10QuantizedLinear.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "MODEL_DIR=\"${SRCROOT}/CameraAccess/MLModels/DepthProPruned10QuantizedLinear.mlpackage/Data/com.apple.CoreML/weights\"\nWEIGHT_FILE=\"${MODEL_DIR}/weight.bin\"\nEXPECTED_SIZE=1094320064\n\nif [ -f \"$WEIGHT_FILE\" ]; then\n  ACTUAL_SIZE=$(stat -f%z \"$WEIGHT_FILE\" 2>/dev/null || echo 0)\n  if [ \"$ACTUAL_SIZE\" = \"$EXPECTED_SIZE\" ]; then\n    exit 0\n  fi\nfi\n\necho \"Downloading DepthPro model weights (~1GB, first build only)...\"\nmkdir -p \"$MODEL_DIR\"\ncurl -L -o \"$WEIGHT_FILE\" \"https://github.com/tomasztomaszewskiint-dotcom/meta-wearables-dat-ios-fork/releases/download/depthpro-model-v1/weight.bin\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		AAAAAAAAAAAAAAAAAAAAAA /* Sources */ = {
