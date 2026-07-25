@@ -79,6 +79,16 @@ final class StreamSessionViewModel {
   /// sized/positioned to cover detected text, updated by
   /// `scheduleTextRegionDetectionIfNeeded`.
   var reticleRect: CGRect = .zero
+  /// Precise outline of the main foreground object inside the reticle, if
+  /// Vision's foreground segmentation found one — see `RecognitionService.detectObjectFoundation`.
+  var objectOutline: ObjectOutline?
+  /// Text read off the object's own packaging — only populated when no
+  /// barcode was found within the object's outline, since the barcode is
+  /// the stronger identifying signal when both are available.
+  var objectIdentifyingText: String?
+  /// Approximate average color of the object (background removed) — see
+  /// `RecognitionService.ObjectFoundation.dominantColor`.
+  var objectDominantColor: Color?
 
   var hasActiveDevice: Bool { sessionManager.hasActiveDevice }
   var isDeviceSessionReady: Bool { sessionManager.isReady }
@@ -105,6 +115,18 @@ final class StreamSessionViewModel {
   /// Classifications below this confidence are treated as "unknown" and
   /// hidden, rather than showing a noisy, low-confidence guess.
   private let minClassificationConfidence: Float = 0.25
+  /// How many of Vision's top classification candidates to consider when
+  /// re-ranking by shape — not just the single best-scoring one.
+  private let classificationCandidateCount = 3
+  /// Contours rounder than this are treated as "clearly round" for re-ranking.
+  private let highCircularityThreshold: CGFloat = 0.75
+  /// Contours flatter than this are treated as "clearly flat/rectangular".
+  private let lowCircularityThreshold: CGFloat = 0.4
+  /// Light heuristic labels used to re-rank classification candidates
+  /// against the object's contour shape — e.g. a very round contour is more
+  /// likely a bottle/can/jar than whatever unrelated label scored highest.
+  private let roundContainerKeywords: Set<String> = ["bottle", "can", "jar", "cup", "mug", "bowl", "ball", "wheel"]
+  private let flatObjectKeywords: Set<String> = ["book", "phone", "box", "laptop", "tablet", "card", "document", "screen"]
   /// Size (in points) of the video container view, kept in sync from
   /// `StreamView` so frame pixels can be mapped to/from the on-screen reticle.
   private var containerSize: CGSize = .zero
@@ -191,6 +213,9 @@ final class StreamSessionViewModel {
     productResults = [:]
     barcodesBeingResolved = []
     objectClassification = nil
+    objectOutline = nil
+    objectIdentifyingText = nil
+    objectDominantColor = nil
     reticleRect = .zero
     sessionManager.cleanup()
   }
@@ -362,24 +387,78 @@ final class StreamSessionViewModel {
       defer { isRecognizingText = false }
       do {
         async let barcodesTask = recognitionService.detectBarcodes(in: scanImage)
-        async let classificationsTask = recognitionService.classifyObject(in: scanImage)
-        // Only run OCR when enabled — barcode detection and classification
+        // Traces the object's outline/isolates it first — classification and
+        // any fallback OCR run afterward, once we know whether a barcode
+        // already identifies this object (see below).
+        async let foundationTask = recognitionService.detectObjectFoundation(in: scanImage)
+        // Only run OCR when enabled — barcode detection and object detection
         // keep running regardless, since the toggle only concerns plain text.
         let texts = isTextRecognitionEnabled ? try await recognitionService.recognizeText(in: scanImage) : []
-        let (barcodes, classifications) = try await (barcodesTask, classificationsTask)
+        let (barcodes, foundation) = try await (barcodesTask, foundationTask)
 
         let clusters = TextClusterer.cluster(texts)
         recognizedTexts = texts
         detectedBarcodes = barcodes
-        objectClassification = classifications.first { $0.confidence >= minClassificationConfidence }
+        objectOutline = foundation?.outline
+        objectDominantColor = foundation?.dominantColor.map(Color.init)
+
+        if let foundation {
+          let candidates =
+            (try? await recognitionService.classifyObject(inPixelBuffer: foundation.isolatedObjectBuffer)) ?? []
+          let topCandidates = Array(candidates.prefix(classificationCandidateCount))
+          let classification = bestClassification(among: topCandidates, shape: foundation.shapeFeatures)
+          objectClassification = classification.flatMap {
+            $0.confidence >= minClassificationConfidence ? $0 : nil
+          }
+
+          // Barcode already identifies this object — no need for a text fallback.
+          let hasOwnBarcode = barcodes.contains { $0.boundingBox.intersects(foundation.boundingBox) }
+          if hasOwnBarcode {
+            objectIdentifyingText = nil
+          } else {
+            let fallbackTexts = try? await recognitionService.recognizeText(
+              inPixelBuffer: foundation.isolatedObjectBuffer
+            )
+            objectIdentifyingText = fallbackTexts?.map(\.text).joined(separator: " ")
+              .trimmingCharacters(in: .whitespaces)
+            if objectIdentifyingText?.isEmpty == true { objectIdentifyingText = nil }
+          }
+        } else {
+          objectClassification = nil
+          objectIdentifyingText = nil
+        }
+
         recognitionStore?.record(clusters)
         resolveProducts(for: barcodes)
-        recordSightingIfObjectKnown(clusters: clusters, barcodes: barcodes)
+        recordSightingIfObjectKnown(clusters: clusters, barcodes: barcodes, foundation: foundation)
         recordLocalLabels(barcodes: barcodes)
       } catch {
         // Non-fatal: OCR/barcode/classification failures shouldn't interrupt the video stream.
+        NSLog("[ObjectOutline] Scan cycle failed: \(error)")
       }
     }
+  }
+
+  /// Picks the classification candidate to show, re-ranked by how well the
+  /// object's contour shape agrees with each candidate — a light heuristic:
+  /// a very round contour is more likely a bottle/can/jar than whatever
+  /// unrelated label happened to score highest, and vice versa for flat shapes.
+  private func bestClassification(
+    among candidates: [ObjectClassification], shape: ObjectShapeFeatures
+  ) -> ObjectClassification? {
+    guard let top = candidates.first else { return nil }
+
+    if shape.circularity > highCircularityThreshold {
+      if let roundMatch = candidates.first(where: { roundContainerKeywords.contains($0.identifier.lowercased()) }) {
+        return roundMatch
+      }
+    } else if shape.circularity < lowCircularityThreshold {
+      if let flatMatch = candidates.first(where: { flatObjectKeywords.contains($0.identifier.lowercased()) }) {
+        return flatMatch
+      }
+    }
+
+    return top
   }
 
   /// Logs the object classification badge and any barcode/resolved-product
@@ -389,6 +468,10 @@ final class StreamSessionViewModel {
   private func recordLocalLabels(barcodes: [DetectedBarcode]) {
     if let classification = objectClassification {
       recognitionStore?.recordLabel(classification.identifier)
+    }
+
+    if let identifyingText = objectIdentifyingText {
+      recognitionStore?.recordLabel(identifyingText)
     }
 
     for barcode in barcodes {
@@ -403,28 +486,36 @@ final class StreamSessionViewModel {
   }
 
   /// Mirrors this scan cycle's recognized text/barcode to Firestore, but only
-  /// when the object is actually known — either via Vision's general
-  /// classification, or (a stronger signal) a barcode that resolved to a
-  /// real product name, even from the offline cache. A bare piece of
-  /// recognized text or an unresolved barcode is never uploaded on its own.
-  private func recordSightingIfObjectKnown(clusters: [ClusteredText], barcodes: [DetectedBarcode]) {
+  /// when the object is actually known — a barcode resolved to a real
+  /// product name (even from the offline cache), Vision's general
+  /// classification, or text read directly off the object's own packaging
+  /// (the fallback used when it has no barcode of its own). A bare piece of
+  /// recognized text unconnected to any object is never uploaded on its own.
+  private func recordSightingIfObjectKnown(
+    clusters: [ClusteredText], barcodes: [DetectedBarcode], foundation: ObjectFoundation?
+  ) {
     let resolvedProductName = barcodes.lazy.compactMap { [productResults] barcode -> String? in
       guard case .found(let details, _) = productResults[barcode.payload] else { return nil }
       return details.name
     }.first
 
-    guard resolvedProductName != nil || objectClassification != nil else { return }
+    guard resolvedProductName != nil || objectClassification != nil || objectIdentifyingText != nil else { return }
 
-    let objectLabel = resolvedProductName ?? objectClassification!.identifier
-    let objectConfidence = resolvedProductName != nil ? 1.0 : Double(objectClassification!.confidence)
+    let objectLabel = resolvedProductName ?? objectClassification?.identifier ?? objectIdentifyingText!
+    let objectConfidence = resolvedProductName != nil ? 1.0 : Double(objectClassification?.confidence ?? 0)
     let barcode = barcodes.first
+    let shapeFeatures = foundation?.shapeFeatures
+    let dominantColorHex = foundation?.dominantColor.map(Self.hexString(for:))
     Task {
       await firestoreSightingService.saveSighting(
         objectLabel: objectLabel,
         objectConfidence: objectConfidence,
-        recognizedText: clusters.first?.text,
+        recognizedText: objectIdentifyingText ?? clusters.first?.text,
         barcodePayload: barcode?.payload,
-        barcodeSymbology: barcode?.symbology.rawValue
+        barcodeSymbology: barcode?.symbology.rawValue,
+        dominantColorHex: dominantColorHex,
+        aspectRatio: shapeFeatures.map { Double($0.aspectRatio) },
+        circularity: shapeFeatures.map { Double($0.circularity) }
       )
     }
   }
@@ -701,5 +792,16 @@ final class StreamSessionViewModel {
   private func showError(_ message: String) {
     errorMessage = message
     showError = true
+  }
+
+  private static func hexString(for color: UIColor) -> String {
+    var red: CGFloat = 0
+    var green: CGFloat = 0
+    var blue: CGFloat = 0
+    var alpha: CGFloat = 0
+    color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+    return String(
+      format: "#%02X%02X%02X", Int(red * 255), Int(green * 255), Int(blue * 255)
+    )
   }
 }

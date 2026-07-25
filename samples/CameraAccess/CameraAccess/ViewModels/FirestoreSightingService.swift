@@ -25,6 +25,9 @@ final class FirestoreSightingService {
     recognizedText: String?,
     barcodePayload: String?,
     barcodeSymbology: String?,
+    dominantColorHex: String? = nil,
+    aspectRatio: Double? = nil,
+    circularity: Double? = nil,
     timestamp: Date = Date()
   ) async {
     if let lastSaved = lastSavedAt[objectLabel], timestamp.timeIntervalSince(lastSaved) < dedupeWindow {
@@ -40,6 +43,9 @@ final class FirestoreSightingService {
     if let recognizedText { data["recognizedText"] = recognizedText }
     if let barcodePayload { data["barcodePayload"] = barcodePayload }
     if let barcodeSymbology { data["barcodeSymbology"] = barcodeSymbology }
+    if let dominantColorHex { data["dominantColorHex"] = dominantColorHex }
+    if let aspectRatio { data["aspectRatio"] = aspectRatio }
+    if let circularity { data["circularity"] = circularity }
 
     do {
       let ref = try await db.collection(Self.collectionName).addDocument(data: data)

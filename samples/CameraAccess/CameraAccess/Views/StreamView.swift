@@ -52,11 +52,21 @@ struct StreamView: View {
               }
             )
 
-            ReticleView(rect: viewModel.reticleRect)
-              .animation(.easeInOut(duration: 0.25), value: viewModel.reticleRect)
+            if let outline = viewModel.objectOutline {
+              ObjectOutlineView(outline: outline, reticleRect: viewModel.reticleRect)
+            }
 
             if let classification = viewModel.objectClassification {
-              ObjectClassificationLabel(classification: classification, reticleRect: viewModel.reticleRect)
+              ObjectClassificationLabel(
+                classification: classification,
+                dominantColor: viewModel.objectDominantColor,
+                reticleRect: viewModel.reticleRect
+              )
+              .animation(.easeInOut(duration: 0.25), value: viewModel.reticleRect)
+            }
+
+            if let identifyingText = viewModel.objectIdentifyingText {
+              ObjectIdentifyingTextLabel(text: identifyingText, reticleRect: viewModel.reticleRect)
                 .animation(.easeInOut(duration: 0.25), value: viewModel.reticleRect)
             }
           }
@@ -313,61 +323,83 @@ private struct ProductDetailsChip: View {
   }
 }
 
+/// Draws the precise outline of the foreground object found by
+/// `RecognitionService.detectObjectOutline` — a real contour, not just the
+/// reticle's rectangle — in a color distinct from every other overlay.
+struct ObjectOutlineView: View {
+  let outline: ObjectOutline
+  let reticleRect: CGRect
+
+  var body: some View {
+    path
+      .stroke(Color.yellow, lineWidth: 3)
+  }
+
+  /// Maps Vision's normalized path (unit square, origin bottom-left) onto
+  /// the reticle's position in container space — the same convention used
+  /// by `RecognizedTextOverlay`/`DetectedBarcodeOverlay`, expressed here as
+  /// an affine transform instead of per-point math.
+  private var path: Path {
+    var transform = CGAffineTransform(scaleX: reticleRect.width, y: -reticleRect.height)
+      .concatenating(CGAffineTransform(translationX: reticleRect.minX, y: reticleRect.minY + reticleRect.height))
+    guard let transformed = outline.path.copy(using: &transform) else { return Path() }
+    return Path(transformed)
+  }
+}
+
 /// A floating badge naming the general contents of the reticle (e.g.
 /// "Bottle"), positioned just above it so it doesn't cover the object.
 struct ObjectClassificationLabel: View {
   let classification: ObjectClassification
+  /// Approximate average color of the object — shown as a small swatch so
+  /// the color signal used to re-rank classification candidates is visible,
+  /// not just used invisibly behind the scenes.
+  let dominantColor: Color?
   let reticleRect: CGRect
 
   var body: some View {
-    Text(classification.identifier.replacingOccurrences(of: "_", with: " ").capitalized)
-      .font(.subheadline.weight(.semibold))
-      .foregroundStyle(.white)
-      .padding(.horizontal, 10)
-      .padding(.vertical, 5)
-      .background(Color.blue.opacity(0.85))
-      .clipShape(Capsule())
-      .position(x: reticleRect.midX, y: reticleRect.minY - 24)
+    HStack(spacing: 6) {
+      if let dominantColor {
+        Circle()
+          .fill(dominantColor)
+          .overlay(Circle().stroke(Color.white.opacity(0.6), lineWidth: 1))
+          .frame(width: 12, height: 12)
+      }
+      Text(classification.identifier.replacingOccurrences(of: "_", with: " ").capitalized)
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(.white)
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 5)
+    .background(Color.blue.opacity(0.85))
+    .clipShape(Capsule())
+    .position(x: reticleRect.midX, y: reticleRect.minY - 24)
   }
 }
 
-/// A camera-style viewfinder reticle: corner brackets marking the region
-/// that `StreamSessionViewModel` restricts OCR scanning to.
-struct ReticleView: View {
-  let rect: CGRect
+/// Text read directly off the object's own packaging — shown only when no
+/// barcode was found for it (see `objectIdentifyingText`), as the fallback
+/// identifying signal. Positioned below the reticle so it doesn't collide
+/// with the classification badge above it.
+struct ObjectIdentifyingTextLabel: View {
+  let text: String
+  let reticleRect: CGRect
 
   var body: some View {
-    ReticleShape()
-      .stroke(Color.white, lineWidth: 3)
-      .frame(width: rect.width, height: rect.height)
-      .position(x: rect.midX, y: rect.midY)
+    Text(text)
+      .font(.caption.weight(.semibold))
+      .foregroundStyle(.white)
+      .lineLimit(2)
+      .multilineTextAlignment(.center)
+      .padding(.horizontal, 10)
+      .padding(.vertical, 5)
+      .background(Color.teal.opacity(0.85))
+      .clipShape(Capsule())
+      .frame(maxWidth: 200)
+      .position(x: reticleRect.midX, y: reticleRect.maxY + 24)
   }
 }
 
-private struct ReticleShape: Shape {
-  func path(in rect: CGRect) -> Path {
-    let cornerLength = min(rect.width, rect.height) * 0.15
-    var path = Path()
-
-    path.move(to: CGPoint(x: rect.minX, y: rect.minY + cornerLength))
-    path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
-    path.addLine(to: CGPoint(x: rect.minX + cornerLength, y: rect.minY))
-
-    path.move(to: CGPoint(x: rect.maxX - cornerLength, y: rect.minY))
-    path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-    path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + cornerLength))
-
-    path.move(to: CGPoint(x: rect.maxX, y: rect.maxY - cornerLength))
-    path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-    path.addLine(to: CGPoint(x: rect.maxX - cornerLength, y: rect.maxY))
-
-    path.move(to: CGPoint(x: rect.minX + cornerLength, y: rect.maxY))
-    path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-    path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - cornerLength))
-
-    return path
-  }
-}
 
 /// Item count in the (demo-only) cart, shown at all times while streaming.
 /// No monetary total is shown — neither Open Food Facts nor UPCitemdb's free
