@@ -49,33 +49,4 @@ final class FirestoreSightingService {
       NSLog("[FirestoreSightingService] Failed to save sighting for \(objectLabel): \(error)")
     }
   }
-
-  /// Saves a DepthPro size estimate as a "dimensional feature" — explicitly
-  /// triggered by the user (the "Estimate Size" action in text-recognition
-  /// mode), typically for objects that couldn't be identified any other way,
-  /// so this isn't gated behind knowing what the object is.
-  func saveDimensionEstimate(
-    objectLabel: String?,
-    recognizedText: String?,
-    widthCm: Double,
-    heightCm: Double,
-    depthMeters: Double,
-    timestamp: Date = Date()
-  ) async {
-    var data: [String: Any] = [
-      "widthCm": widthCm,
-      "heightCm": heightCm,
-      "depthMeters": depthMeters,
-      "timestamp": Timestamp(date: timestamp),
-    ]
-    if let objectLabel { data["objectLabel"] = objectLabel }
-    if let recognizedText { data["recognizedText"] = recognizedText }
-
-    do {
-      let ref = try await db.collection("dimensionEstimates").addDocument(data: data)
-      NSLog("[FirestoreSightingService] Saved dimension estimate as document %@", ref.documentID)
-    } catch {
-      NSLog("[FirestoreSightingService] Failed to save dimension estimate: \(error)")
-    }
-  }
 }

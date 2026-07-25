@@ -80,13 +80,6 @@ final class StreamSessionViewModel {
   /// `scheduleTextRegionDetectionIfNeeded`.
   var reticleRect: CGRect = .zero
 
-  /// On-demand, DepthPro-based size estimate for whatever's in the reticle —
-  /// a fallback for objects nothing else could identify. User-triggered only
-  /// (see `estimateObjectSize`), never runs as part of the per-frame scan.
-  var estimatedObjectSize: EstimatedSize?
-  var isEstimatingSize: Bool = false
-  var sizeEstimationError: String?
-
   var hasActiveDevice: Bool { sessionManager.hasActiveDevice }
   var isDeviceSessionReady: Bool { sessionManager.isReady }
 
@@ -101,7 +94,6 @@ final class StreamSessionViewModel {
   private let recognitionService = RecognitionService()
   private var recognitionStore: RecognizedTextStore?
   private let firestoreSightingService = FirestoreSightingService()
-  private let depthEstimationService = DepthEstimationService()
   private let networkMonitor = NetworkMonitor()
   private var productResolver: ProductResolver?
   private var barcodesBeingResolved: Set<String> = []
@@ -200,8 +192,6 @@ final class StreamSessionViewModel {
     barcodesBeingResolved = []
     objectClassification = nil
     reticleRect = .zero
-    estimatedObjectSize = nil
-    sizeEstimationError = nil
     sessionManager.cleanup()
   }
 
@@ -234,37 +224,6 @@ final class StreamSessionViewModel {
 
   func beginPurchase(barcode: String, details: ProductDetails) {
     pendingPurchase = PendingPurchase(barcode: barcode, details: details)
-  }
-
-  /// Runs DepthPro on-demand for whatever's currently in the reticle and
-  /// saves the result to Firestore as a "dimensional feature" — meant for
-  /// text-recognition mode, as a fallback when the object itself couldn't be
-  /// identified by barcode/classification. Never runs automatically.
-  func estimateObjectSize() {
-    guard !isEstimatingSize, let image = currentVideoFrame, let scanImage = croppedToReticle(image) else {
-      return
-    }
-
-    isEstimatingSize = true
-    sizeEstimationError = nil
-    Task {
-      defer { isEstimatingSize = false }
-      do {
-        let estimate = try await depthEstimationService.estimateSize(
-          in: scanImage, boundingBox: CGRect(x: 0, y: 0, width: 1, height: 1)
-        )
-        estimatedObjectSize = estimate
-        await firestoreSightingService.saveDimensionEstimate(
-          objectLabel: objectClassification?.identifier,
-          recognizedText: recognizedTexts.first?.text,
-          widthCm: estimate.widthCm,
-          heightCm: estimate.heightCm,
-          depthMeters: estimate.depthMeters
-        )
-      } catch {
-        sizeEstimationError = error.localizedDescription
-      }
-    }
   }
 
   /// Toggles plain-text OCR on/off. Barcode/QR detection and object

@@ -59,11 +59,6 @@ struct StreamView: View {
               ObjectClassificationLabel(classification: classification, reticleRect: viewModel.reticleRect)
                 .animation(.easeInOut(duration: 0.25), value: viewModel.reticleRect)
             }
-
-            if viewModel.isTextRecognitionEnabled, let estimate = viewModel.estimatedObjectSize {
-              EstimatedSizeLabel(estimate: estimate, reticleRect: viewModel.reticleRect)
-                .animation(.easeInOut(duration: 0.25), value: viewModel.reticleRect)
-            }
           }
           .onAppear {
             viewModel.updateContainerSize(geometry.size)
@@ -336,25 +331,6 @@ struct ObjectClassificationLabel: View {
   }
 }
 
-/// Shows the rough size estimate from `DepthEstimationService`, below the
-/// reticle. Explicitly labeled "estimated" — this is a DepthPro-based
-/// approximation (see its FOV assumption), not a measurement.
-struct EstimatedSizeLabel: View {
-  let estimate: EstimatedSize
-  let reticleRect: CGRect
-
-  var body: some View {
-    Text(String(format: "~%.0f × %.0f cm (estimated)", estimate.widthCm, estimate.heightCm))
-      .font(.caption.weight(.semibold))
-      .foregroundStyle(.white)
-      .padding(.horizontal, 10)
-      .padding(.vertical, 5)
-      .background(Color.purple.opacity(0.85))
-      .clipShape(Capsule())
-      .position(x: reticleRect.midX, y: reticleRect.maxY + 24)
-  }
-}
-
 /// A camera-style viewfinder reticle: corner brackets marking the region
 /// that `StreamSessionViewModel` restricts OCR scanning to.
 struct ReticleView: View {
@@ -414,47 +390,6 @@ struct CartSummaryBadge: View {
   }
 }
 
-/// Triggers `DepthEstimationService` for whatever's in the reticle. The
-/// model ships in the app bundle (see `MLModels/`), so there's no
-/// download/compile wait — just the inference time for one estimate.
-struct EstimateSizeButton: View {
-  var viewModel: StreamSessionViewModel
-
-  var body: some View {
-    CircleButton(icon: "arrow.up.left.and.arrow.down.right", text: nil) {
-      viewModel.estimateObjectSize()
-    }
-    .disabled(viewModel.isEstimatingSize)
-    .overlay {
-      if viewModel.isEstimatingSize {
-        ProgressView()
-          .tint(.white)
-      }
-    }
-    .accessibilityIdentifier("estimate_size_button")
-    .overlay(alignment: .bottom) {
-      if let error = viewModel.sizeEstimationError {
-        Text("Estimate failed: \(error)")
-          .statusLabelStyle()
-          .offset(y: 40)
-      }
-    }
-  }
-}
-
-extension Text {
-  fileprivate func statusLabelStyle() -> some View {
-    self
-      .font(.caption2)
-      .foregroundStyle(.white)
-      .padding(.horizontal, 6)
-      .padding(.vertical, 3)
-      .background(Color.black.opacity(0.75))
-      .clipShape(Capsule())
-      .fixedSize()
-  }
-}
-
 // Extracted controls for clarity
 struct ControlsView: View {
   var viewModel: StreamSessionViewModel
@@ -485,12 +420,6 @@ struct ControlsView: View {
           .stroke(viewModel.isTextRecognitionEnabled ? Color.green : Color.clear, lineWidth: 3)
       )
       .accessibilityIdentifier("toggle_text_recognition_button")
-
-      // Only shown in text-recognition mode — an on-demand fallback for
-      // sizing objects nothing else (barcode, classification) could identify.
-      if viewModel.isTextRecognitionEnabled {
-        EstimateSizeButton(viewModel: viewModel)
-      }
 
       // Opens the (demo-only, in-memory) cart of items tapped "Buy" on.
       CircleButton(icon: "cart.fill", text: nil) {
